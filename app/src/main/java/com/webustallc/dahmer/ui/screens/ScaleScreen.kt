@@ -270,10 +270,10 @@ fun LargeWeightArea(
 
                 Spacer(modifier = Modifier.height(24.dp))
 
-                // Pressure Display - Clean and Simple
-                if (animatedPressure > 0.001f) {
+                // Force Index Display - Shows measurement strength
+                if (animatedPressure > 0.1f) {
                     Text(
-                        text = "${String.format("%.1f", animatedPressure)} hPa",
+                        text = "${String.format("%.1f", animatedPressure)} units",
                         style = MaterialTheme.typography.titleLarge.copy(
                             fontSize = 18.sp
                         ),
@@ -281,7 +281,7 @@ fun LargeWeightArea(
                     )
                 } else {
                     Text(
-                        text = "0.0 hPa",
+                        text = "0.0 units",
                         style = MaterialTheme.typography.titleLarge.copy(
                             fontSize = 18.sp
                         ),

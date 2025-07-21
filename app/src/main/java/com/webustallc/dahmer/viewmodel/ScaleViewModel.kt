@@ -60,7 +60,7 @@ class ScaleViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        // Load and apply saved calibration
+        // Load and apply saved calibration - TEMPORARILY DISABLED FOR DEBUGGING
         viewModelScope.launch {
             combine(
                 preferencesManager.baselinePressure,
@@ -68,8 +68,9 @@ class ScaleViewModel(application: Application) : AndroidViewModel(application) {
                 preferencesManager.isCalibrated
             ) { zeroOffset, weightFactor, isCalibrated ->
                 if (isCalibrated) {
-                    touchPressureManager.applyCalibration(zeroOffset, 9.81f, weightFactor)
-                    updateAccuracyStatus()
+                    android.util.Log.d("ScaleViewModel", "SKIPPING calibration load: zeroOffset=$zeroOffset (would override fresh start)")
+                    // touchPressureManager.applyCalibration(zeroOffset, 9.81f, weightFactor)
+                    // updateAccuracyStatus()
                 }
             }.collect { }
         }
@@ -91,20 +92,22 @@ class ScaleViewModel(application: Application) : AndroidViewModel(application) {
     private fun updateStatusMessage(weight: Float, pressure: Float, isActive: Boolean) {
         val newMessage = when {
             !isActive -> "Scale is stopped - Press Start to begin"
+            weight > 250f -> "⚠️ DANGER: Remove weight immediately! Risk of screen damage!"
+            weight > 200f -> "⚠️ WARNING: Weight too high - Remove object to prevent damage"
             !touchPressureManager.isCalibrated() -> {
                 when {
-                    weight < 0.01f -> "Ready - Touch screen to measure weight"  // More encouraging
-                    weight < 0.5f -> "Detecting: ${getDisplayWeight()}"
-                    else -> "Measuring: ${getDisplayWeight()}"
+                    weight < 0.5f -> "Ready - Touch screen to measure weight"  
+                    weight < 2f -> "Detecting: ${getDisplayWeight()}"
+                    else -> "Measuring: ${getDisplayWeight()} (Uncalibrated)"
                 }
             }
-            weight < 0.01f -> "Ready - Place object and apply pressure"
-            weight < 0.1f -> "Detecting: ${getDisplayWeight()}"
-            weight < 1f -> "Light weight: ${getDisplayWeight()}"
-            weight < 10f -> "Measuring: ${getDisplayWeight()}"
+            weight < 0.5f -> "Ready - Place object and apply pressure"
+            weight < 1f -> "Detecting: ${getDisplayWeight()}"
+            weight < 5f -> "Light weight: ${getDisplayWeight()}"
+            weight < 20f -> "Measuring: ${getDisplayWeight()}"
             weight < 100f -> "Weight: ${getDisplayWeight()}"
-            weight < 1000f -> "Heavy weight: ${getDisplayWeight()}"
-            else -> "Maximum capacity: ${getDisplayWeight()}"
+            weight < 200f -> "Heavy weight: ${getDisplayWeight()}"
+            else -> "⚠️ Maximum safe capacity: ${getDisplayWeight()}"
         }
         _statusMessage.value = newMessage
         android.util.Log.d("ScaleViewModel", "Status updated: $newMessage (weight=$weight, pressure=$pressure)")

@@ -53,14 +53,17 @@ class TouchPressureManager(private val context: Context) : SensorEventListener {
     private val accelerometerBuffer = CircularBuffer(15)
     private val weightBuffer = CircularBuffer(10)
 
-    // Physical constants and thresholds
+    // Physical constants and thresholds - Updated for proper scale algorithm
     companion object {
-        private const val MIN_DETECTABLE_PRESSURE = 0.001f // Much lower for instant detection
-        private const val MIN_DETECTABLE_WEIGHT = 0.01f // Much lower - was 0.1f
-        private const val MAX_REASONABLE_WEIGHT = 5000f // Maximum weight in grams for mobile scale
-        private const val TOUCH_PRESSURE_COEFFICIENT = 0.05f // Touch pressure to hPa conversion
-        private const val PRESSURE_TO_WEIGHT_BASE = 10f // Base conversion factor
-        private const val STABILIZATION_TIME_MS = 50L // Much faster - was 200L
+        private const val MIN_DETECTABLE_PRESSURE = 0.1f // Minimum force index to register
+        private const val MIN_DETECTABLE_WEIGHT = 0.5f // Minimum weight in grams (realistic threshold)
+        private const val MAX_REASONABLE_WEIGHT = 300f // Maximum safe weight for phone screen (300g)
+        private const val FORCE_INDEX_SCALING = 100f // Scaling factor for force index calculation
+        private const val STABILIZATION_TIME_MS = 100L // Time for readings to stabilize
+        
+        // Safety warnings for users
+        private const val WARNING_WEIGHT_THRESHOLD = 200f // Warn user above this weight
+        private const val DANGER_WEIGHT_THRESHOLD = 250f // Strong warning above this weight
     }
 
     init {
@@ -152,18 +155,18 @@ class TouchPressureManager(private val context: Context) : SensorEventListener {
         touchPointerCount = event.pointerCount
         android.util.Log.d("TouchPressureManager", "Started touch measurement with ${touchPointerCount} pointers")
         updateTouchParameters(event)
-        calculatePressureAndWeight()
+        calculateForceAndWeight()
     }
 
     private fun updateMultiTouchMeasurement(event: MotionEvent) {
         touchPointerCount = event.pointerCount
         updateTouchParameters(event)
-        calculatePressureAndWeight()
+        calculateForceAndWeight()
     }
 
     private fun updateTouchMeasurement(event: MotionEvent) {
         updateTouchParameters(event)
-        calculatePressureAndWeight()
+        calculateForceAndWeight()
     }
 
     private fun endTouchMeasurement() {
@@ -198,51 +201,49 @@ class TouchPressureManager(private val context: Context) : SensorEventListener {
         touchPressureIntensity = totalPressure / event.pointerCount.coerceAtLeast(1)
     }
 
-    private fun calculatePressureAndWeight() {
+    private fun calculateForceAndWeight() {
         if (!_isActive.value) return
 
-        var measuredPressure = 0f
+        var measuredForceIndex = 0f
 
         if (isTouchActive && touchPointerCount > 0) {
-            // Calculate touch-based pressure contribution
-            val touchPressureContribution = calculateTouchPressure()
+            // Calculate touch-based force index (main measurement)
+            val touchForceContribution = calculateTouchPressure() // This now returns force index
             
-            // Calculate sensor-based pressure change
+            // Calculate sensor-based pressure change (secondary measurement)
             val sensorPressureContribution = calculateSensorPressureChange()
             
-            // Calculate accelerometer-based contribution
+            // Calculate accelerometer-based contribution (tertiary measurement)
             val accelerometerContribution = calculateAccelerometerContribution()
             
             // Combine contributions with intelligent weighting
-            measuredPressure = combineSignals(
-                touchPressureContribution,
+            measuredForceIndex = combineSignals(
+                touchForceContribution,
                 sensorPressureContribution,
                 accelerometerContribution
             )
             
-            // IMMEDIATE UPDATE: Skip buffering for instant UI response
-            // pressureBuffer.add(measuredPressure)
-            // measuredPressure = pressureBuffer.getAverage()
+            // Apply smoothing for stability (optional)
+            // forceBuffer.add(measuredForceIndex)
+            // measuredForceIndex = forceBuffer.getAverage()
         }
 
-        // Apply zero calibration offset - BYPASS FOR IMMEDIATE DETECTION
-        android.util.Log.d("TouchPressureManager", "Before calibration: measuredPressure=$measuredPressure, zeroOffset=$zeroOffsetPressure")
-        // FIXED: Don't use zero offset - use raw pressure for immediate detection
-        // measuredPressure = (measuredPressure - zeroOffsetPressure).coerceAtLeast(0f)
-        measuredPressure = measuredPressure.coerceAtLeast(0f) // Use raw pressure directly
-        android.util.Log.d("TouchPressureManager", "ZERO OFFSET BYPASSED - using raw pressure: $measuredPressure")
+        // Apply zero calibration (baseline subtraction)
+        android.util.Log.d("TouchPressureManager", "Before calibration: forceIndex=$measuredForceIndex, zeroOffset=$zeroOffsetPressure")
+        measuredForceIndex = (measuredForceIndex - zeroOffsetPressure).coerceAtLeast(0f)
+        android.util.Log.d("TouchPressureManager", "After zero calibration: $measuredForceIndex")
 
-        // FORCE IMMEDIATE UI UPDATE
-        _touchPressure.value = measuredPressure
-        android.util.Log.d("TouchPressureManager", "Touch pressure updated: $measuredPressure hPa")
+        // Update force index display (we'll show this as "pressure" for UI continuity)
+        _touchPressure.value = measuredForceIndex
+        android.util.Log.d("TouchPressureManager", "Force index updated: $measuredForceIndex units")
 
-        // Calculate weight from pressure - IMMEDIATE UPDATE
-        val calculatedWeight = calculateWeightFromPressure(measuredPressure)
+        // Calculate weight from force index using calibration
+        val calculatedWeight = calculateWeightFromForceIndex(measuredForceIndex)
         
-        // FORCE IMMEDIATE WEIGHT UPDATE - no buffering for instant response
+        // Update weight with reasonable limits
         val finalWeight = calculatedWeight.coerceIn(0f, MAX_REASONABLE_WEIGHT)
         _weight.value = finalWeight
-        android.util.Log.d("TouchPressureManager", "Weight updated IMMEDIATELY: pressure=$measuredPressure, weight=$finalWeight")
+        android.util.Log.d("TouchPressureManager", "Weight calculated: forceIndex=$measuredForceIndex, weight=$finalWeight grams")
         
         if (finalWeight < MIN_DETECTABLE_WEIGHT) {
             android.util.Log.d("TouchPressureManager", "Weight below threshold: $finalWeight < $MIN_DETECTABLE_WEIGHT")
@@ -252,16 +253,21 @@ class TouchPressureManager(private val context: Context) : SensorEventListener {
     private fun calculateTouchPressure(): Float {
         if (!isTouchActive || touchPointerCount == 0) return 0f
 
-        // ULTRA AGGRESSIVE touch pressure calculation for immediate UI feedback
-        val areaFactor = touchContactArea * touchPointerCount
-        val intensityFactor = touchPressureIntensity
+        // CORRECT PHYSICS: Calculate Force Index = Average Pressure × Total Area
+        // This represents the total force being applied to the screen
         
-        // Convert touch metrics to pressure with EXTREME sensitivity for testing
-        val touchPressure = areaFactor * intensityFactor * 1000f // Increased from 100f to 1000f for ultra sensitivity
+        val averagePressure = touchPressureIntensity // Already normalized per pointer
+        val totalArea = touchContactArea * touchPointerCount // Total contact area
+        
+        // Force Index calculation (this represents actual force, not pressure)
+        val forceIndex = averagePressure * totalArea
+        
+        // Convert to meaningful units with reasonable scaling
+        val scaledForceIndex = forceIndex * 100f // Scale to usable range
 
-        android.util.Log.d("TouchPressureManager", "Touch pressure calc: area=$areaFactor, intensity=$intensityFactor, result=$touchPressure")
+        android.util.Log.d("TouchPressureManager", "CORRECT Force calc: avgPressure=$averagePressure, totalArea=$totalArea, forceIndex=$forceIndex, scaled=$scaledForceIndex")
         
-        return touchPressure
+        return scaledForceIndex
     }
 
     private fun calculateSensorPressureChange(): Float {
@@ -289,39 +295,43 @@ class TouchPressureManager(private val context: Context) : SensorEventListener {
     }
 
     private fun combineSignals(
-        touchPressure: Float,
+        touchForceIndex: Float,
         sensorPressure: Float,
         accelPressure: Float
     ): Float {
-        // Professional signal fusion with conservative weighting
+        // For touch-based scale, prioritize touch force index heavily
         return when {
-            // If we have meaningful sensor data, prioritize it
+            // Touch is the primary measurement for our scale
+            touchForceIndex > 0 -> {
+                // 90% touch data, 10% sensor assistance for stability
+                (touchForceIndex * 0.9f) + (sensorPressure * 0.05f) + (accelPressure * 0.05f)
+            }
+            // Fallback to sensors only if no touch detected
             abs(sensorPressure) >= MIN_DETECTABLE_PRESSURE -> {
-                (sensorPressure * 0.7f) + (touchPressure * 0.2f) + (accelPressure * 0.1f)
+                (sensorPressure * 0.8f) + (accelPressure * 0.2f)
             }
-            // Otherwise, rely more on touch data but keep it conservative
-            touchPressure > 0 -> {
-                (touchPressure * 0.8f) + (accelPressure * 0.2f)
-            }
-            // Fallback to accelerometer only
+            // Last resort: accelerometer only
             else -> {
                 accelPressure
             }
         }
     }
 
-    private fun calculateWeightFromPressure(pressure: Float): Float {
-        if (pressure < 0.0001f) return 0f // Ultra low threshold for instant response
-
+    private fun calculateWeightFromForceIndex(forceIndex: Float): Float {
+        if (forceIndex < 0.0001f) return 0f // Minimum detectable force
+        
         val weight = if (isWeightCalibrated && weightCalibrationFactor > 0) {
-            // Use calibrated conversion
-            pressure / weightCalibrationFactor
+            // PROPER CALIBRATION: Use reference weight to convert force index to grams
+            // weightCalibrationFactor = referenceForceIndex / referenceWeight(grams)
+            // So: weight = forceIndex / weightCalibrationFactor
+            forceIndex / weightCalibrationFactor
         } else {
-            // ULTRA AGGRESSIVE default conversion for immediate UI feedback - increased to 2000f
-            pressure * 2000f // Extreme sensitivity to ensure UI updates immediately
+            // Default conservative conversion until calibration is done
+            // This should be very conservative to avoid unrealistic readings
+            forceIndex * 0.5f // Much more conservative than previous 2000f
         }
         
-        android.util.Log.d("TouchPressureManager", "Weight calc: pressure=$pressure, weight=$weight, calibrated=$isWeightCalibrated")
+        android.util.Log.d("TouchPressureManager", "Weight calc: forceIndex=$forceIndex, weight=$weight grams, calibrated=$isWeightCalibrated")
         return weight
     }
 
@@ -331,16 +341,17 @@ class TouchPressureManager(private val context: Context) : SensorEventListener {
         baselineAcceleration = currentAcceleration
     }
 
-    // Calibration functions
+    // PROPER CALIBRATION SYSTEM - Following your recommended algorithm
     fun calibrateZero() {
         if (isTouchActive) {
             // Can't calibrate while touching
+            android.util.Log.w("TouchPressureManager", "Cannot calibrate while touching screen")
             return
         }
         
-        // CRITICAL FIX: Set zero offset to 0 to allow pressure detection
-        zeroOffsetPressure = 0f  // Force zero for immediate pressure detection
-        android.util.Log.d("TouchPressureManager", "Zero calibration: FORCED to 0 for immediate detection")
+        // TARE/ZERO: Set current force index as baseline (should be close to 0)
+        zeroOffsetPressure = _touchPressure.value
+        android.util.Log.d("TouchPressureManager", "Zero calibration: Baseline set to $zeroOffsetPressure")
         isZeroCalibrated = true
         clearBuffers()
         resetMeasurements()
@@ -348,21 +359,30 @@ class TouchPressureManager(private val context: Context) : SensorEventListener {
 
     fun calibrateWeight(knownWeight: Float) {
         if (!isTouchActive || knownWeight <= 0) {
+            android.util.Log.w("TouchPressureManager", "Invalid calibration: touch=$isTouchActive, weight=$knownWeight")
             return
         }
 
-        val currentPressureReading = _touchPressure.value
-        if (currentPressureReading > MIN_DETECTABLE_PRESSURE) {
-            weightCalibrationFactor = currentPressureReading / knownWeight
+        // WEIGHT CALIBRATION: Calculate calibration factor
+        // weightCalibrationFactor = currentForceIndex / knownWeight
+        val currentForceIndex = _touchPressure.value
+        if (currentForceIndex > MIN_DETECTABLE_PRESSURE) {
+            // Calculate calibration factor: factor = forceIndex / weight
+            weightCalibrationFactor = currentForceIndex / knownWeight
             isWeightCalibrated = true
+            android.util.Log.d("TouchPressureManager", "Weight calibration: factor=$weightCalibrationFactor (forceIndex=$currentForceIndex / weight=$knownWeight)")
+        } else {
+            android.util.Log.w("TouchPressureManager", "Insufficient force for calibration: $currentForceIndex")
         }
     }
 
     fun resetCalibration() {
+        // IMPORTANT: Reset zero offset to allow immediate measurement
         zeroOffsetPressure = 0f
         weightCalibrationFactor = 1f
         isZeroCalibrated = false
         isWeightCalibrated = false
+        android.util.Log.d("TouchPressureManager", "CALIBRATION RESET: zero offset cleared to 0")
         performAtmosphericCalibration()
         clearBuffers()
         resetMeasurements()
