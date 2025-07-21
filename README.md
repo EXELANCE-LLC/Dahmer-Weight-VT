@@ -212,9 +212,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 <div align="center">
 
-| Main Scale Interface | Calibration System | Settings & Controls |
-|:---:|:---:|:---:|
-| ![Main](screenshots/main_scale.png) | ![Calibration](screenshots/calibration.png) | ![Settings](screenshots/settings.png) |
+| Main Scale Interface |
+|:---:|
+| <img width="1079" height="492" alt="image" src="https://github.com/user-attachments/assets/75e71054-2607-4da9-bf58-f71d9198985a" /> |
 
 *Screenshots showing the modern Material Design 3 interface*
 
